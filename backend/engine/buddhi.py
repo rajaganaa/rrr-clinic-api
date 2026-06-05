@@ -50,15 +50,11 @@ TAMIL_UNICODE_RANGE = re.compile(r'[\u0B80-\u0BFF]')
 
 
 def detect_language(text: str) -> str:
-    """
-    Detect whether the input is Tamil or English.
-
-    Tamil Unicode block: U+0B80–U+0BFF
-    Returns 'ta' for Tamil, 'en' for English/other.
-    Threshold: if ≥3 Tamil characters are present, treat as Tamil.
-    """
     tamil_chars = TAMIL_UNICODE_RANGE.findall(text)
     if len(tamil_chars) >= 3:
+        return "ta"
+    # Also detect if user explicitly requests Tamil
+    if re.search(r'\bin tamil\b|\btamil\b|\bதமிழ்\b', text, re.IGNORECASE):
         return "ta"
     return "en"
 
