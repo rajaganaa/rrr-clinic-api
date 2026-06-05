@@ -1,0 +1,36 @@
+# RRR Clinic API — Backend Dependencies
+# CPU-only. No GPU, no vLLM, no torch.
+# Author: Rajaganapathy M
+
+# ── Web framework ─────────────────────────────────────────────────────────────
+fastapi>=0.110.0
+uvicorn[standard]>=0.27.0
+python-multipart>=0.0.9
+
+# ── LLM: Groq (primary) ───────────────────────────────────────────────────────
+groq>=0.9.0
+
+# ── LLM: GitHub Models / OpenAI-compatible (vision + fallback) ───────────────
+openai>=1.25.0
+
+# ── Embeddings (CPU) ──────────────────────────────────────────────────────────
+sentence-transformers>=2.6.0
+
+# ── RAG + Vector DB ───────────────────────────────────────────────────────────
+chromadb>=0.5.0
+langchain>=0.2.0
+langchain-community>=0.2.0
+langchain-openai>=0.1.0
+pypdf>=4.0.0
+
+# ── Image processing ──────────────────────────────────────────────────────────
+Pillow>=10.0.0
+
+# ── MLOps: W&B model monitoring (MLOps Day 3) ─────────────────────────────────
+wandb>=0.17.0
+
+# ── HTTP + utils ──────────────────────────────────────────────────────────────
+requests>=2.31.0
+numpy>=1.24.0
+python-dotenv>=1.0.0
+pydantic>=2.0.0

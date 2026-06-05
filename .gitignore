@@ -1,0 +1,45 @@
+# Environment
+.env
+*.env.local
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+venv/
+env/
+.venv/
+
+# Data — ChromaDB and uploads (do NOT commit vector store)
+data/chroma_db/
+/tmp/
+
+# HuggingFace cache
+.cache/
+~/.cache/huggingface/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Logs
+*.log
+logs/
+
+# Docker
+.dockerignore
+
+# Test artifacts
+.pytest_cache/
+htmlcov/
+.coverage
