@@ -55,7 +55,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],   # Lock down to your domain in production
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -90,6 +90,99 @@ def get_components():
     return _manas, _chitta, _buddhi, _ahamkara, _sakshi
 
 
+# ── W&B: one persistent run per process ───────────────────────────────────────
+_wandb_run = None
+_request_count = 0  # track total requests in this process
+
+
+def _get_wandb_run():
+    global _wandb_run
+    if _wandb_run is not None:
+        return _wandb_run
+    api_key = os.environ.get("WANDB_API_KEY", "")
+    if not api_key:
+        return None
+    try:
+        import wandb
+        _wandb_run = wandb.init(
+            project=os.environ.get("WANDB_PROJECT", "rrr-clinic-medassist"),
+            entity=os.environ.get("WANDB_ENTITY", "rajaganaa-ai"),
+            name="rrr-clinic-production",
+            resume="allow",
+            config={
+                "clinic":   "RRR Clinic, Tamil Nadu",
+                "doctor":   "Dr. Rajeswari M.D",
+                "author":   "Rajaganapathy M, SRM University",
+                "patent":   "202641043947",
+                "model":    "llama3-70b-8192 (Groq)",
+                "pipeline": "7-step Antahkarana",
+                "deploy":   "Azure Container Apps — Central India",
+            },
+            tags=["production", "healthcare", "tamil", "rag", "groq", "azure"],
+        )
+        logger.info("[W&B] Run initialized: rrr-clinic-production")
+        return _wandb_run
+    except Exception as e:
+        logger.warning(f"[W&B] Init failed: {e}")
+        return None
+
+
+def _log_wandb(request_id, question, buddhi_result, ahamkara_result, sakshi_result, latency):
+    """
+    Log each inference to W&B with namespaced metrics for clean dashboard.
+    Metrics logged:
+      latency/   — total, buddhi, overhead
+      quality/   — confidence, verified, corrected, hallucinations
+      pipeline/  — pass2, pass3, verification
+      usage/     — tamil ratio, question length, model
+    """
+    global _request_count
+    run = _get_wandb_run()
+    if run is None:
+        return
+    try:
+        import wandb
+        _request_count += 1
+
+        hallucination_flags = sakshi_result.get("hallucination_flags", [])
+        hallucination_count = len(hallucination_flags) if isinstance(hallucination_flags, list) else 0
+
+        raw_conf  = ahamkara_result.get("confidence_score", 0)
+        conf_float = raw_conf / 100.0 if raw_conf > 1 else raw_conf
+
+        lang     = buddhi_result.get("detected_language", "en")
+        is_tamil = 1 if lang == "ta" else 0
+
+        run.log({
+            # Performance
+            "latency/total_s":    latency,
+            "latency/buddhi_s":   buddhi_result.get("latency_s", 0),
+            "latency/overhead_s": round(latency - buddhi_result.get("latency_s", 0), 3),
+
+            # Quality
+            "quality/confidence":          conf_float,
+            "quality/sakshi_verified":     int(sakshi_result.get("verified", True)),
+            "quality/sakshi_corrected":    int(sakshi_result.get("corrected", False)),
+            "quality/hallucination_count": hallucination_count,
+
+            # Pipeline
+            "pipeline/pass2_fired":    int(buddhi_result.get("pass2_fired", False)),
+            "pipeline/pass3_fired":    int(buddhi_result.get("pass3_fired", False)),
+            "pipeline/pass2_verified": int(buddhi_result.get("pass2_verified", True)),
+
+            # Usage
+            "usage/is_tamil":        is_tamil,
+            "usage/question_length": len(question),
+            "usage/total_requests":  _request_count,
+
+            # Meta
+            "meta/confidence_label": ahamkara_result.get("confidence_label", ""),
+            "meta/model":            buddhi_result.get("model", "unknown"),
+        })
+    except Exception as e:
+        logger.debug(f"[W&B] Logging skipped: {e}")
+
+
 # ── Startup ───────────────────────────────────────────────────────────────────
 
 @app.on_event("startup")
@@ -101,6 +194,8 @@ async def startup_event():
         logger.info("[STARTUP] ChromaDB index ready")
     except Exception as e:
         logger.warning(f"[STARTUP] ChromaDB index build skipped: {e}")
+    # Pre-init W&B so first request isn't slow
+    _get_wandb_run()
 
 
 # ── Health check ──────────────────────────────────────────────────────────────
@@ -114,6 +209,7 @@ async def health_check():
         "author":   "Rajaganapathy M, SRM University",
         "patent":   "202641043947",
         "version":  "1.0.0",
+        "wandb":    "enabled" if os.environ.get("WANDB_API_KEY") else "disabled",
         "pipeline": {
             "manas":    "Question Router",
             "chitta":   "ChromaDB Dense Retrieval",
@@ -141,20 +237,6 @@ async def reason(
     question: str = Form(...),
     image: Optional[UploadFile] = File(None),
 ):
-    """
-    Full 7-step Antahkarana reasoning pipeline.
-
-    Step 1: Vision   — GPT-4o medicine image analysis
-    Step 2: Manas    — question type routing + entity extraction
-    Step 3: Chitta   — dense retrieval from ChromaDB (k=5)
-    Step 4: Buddhi   — Groq LLM multi-pass reasoning (Tamil/English)
-    Step 5: Ahamkara — confidence scoring
-    Step 6: Sakshi   — hallucination verification + final answer
-    Step 7: Tools    — dosage / expiry / FDA if triggered
-
-    final_answer ALWAYS = sakshi_result["final_answer"].
-    Tool result is supplementary data only — never overrides Sakshi.
-    """
     request_id = str(uuid.uuid4())[:8]
     t_total    = time.time()
     logger.info(f"[{request_id}] Request: {question[:80]}")
@@ -171,18 +253,15 @@ async def reason(
             contents   = await image.read()
             with open(image_path, "wb") as f:
                 f.write(contents)
-
             from vision.medicine_vision import extract_medicine_info
             vision_result = extract_medicine_info(str(image_path))
             logger.info(f"[{request_id}] Vision: {vision_result.get('drug_name', 'unknown')}")
-
             drug_name = (
                 vision_result.get("generic_name") or
                 vision_result.get("brand_name", "")
             )
             if drug_name and drug_name not in ["Not detected", "Not visible"] and drug_name not in question:
                 question = f"[About {drug_name}] {question}"
-
         except Exception as e:
             logger.warning(f"[{request_id}] Vision failed: {e}")
             vision_result = {"error": str(e), "extraction_method": "failed"}
@@ -245,7 +324,7 @@ async def reason(
 
     total_latency = round(time.time() - t_total, 3)
 
-    # ── W&B logging (MLOps Day 3) ─────────────────────────────────────────────
+    # ── W&B logging (MLOps Day 4) ─────────────────────────────────────────────
     _log_wandb(request_id, question, buddhi_result, ahamkara_result, sakshi_result, total_latency)
 
     # ── Assemble response ─────────────────────────────────────────────────────
@@ -253,33 +332,27 @@ async def reason(
         "request_id":      request_id,
         "question":        question,
         "total_latency_s": total_latency,
-
-        "vision": vision_result,
-
-        "manas": manas_result,
-
+        "vision":          vision_result,
+        "manas":           manas_result,
         "chitta": {
             "retrieved_chunks": chitta_result["retrieved_chunks"],
             "scores":           [c.get("score", 0) for c in chitta_result["retrieved_chunks"]],
             "num_chunks":       chitta_result["num_chunks"],
             "retrieval_method": chitta_result["retrieval_method"],
         },
-
         "buddhi": {
-            "reasoning_steps":    buddhi_result["reasoning_steps"],
-            "draft_answer":       buddhi_result["draft_answer"],
-            "pass1_answer":       buddhi_result["pass1_answer"],
-            "pass2_fired":        buddhi_result["pass2_fired"],
-            "pass2_verified":     buddhi_result["pass2_verified"],
-            "pass3_fired":        buddhi_result["pass3_fired"],
-            "model":              buddhi_result["model"],
-            "latency_s":          buddhi_result["latency_s"],
-            "detected_language":  buddhi_result["detected_language"],
+            "reasoning_steps":     buddhi_result["reasoning_steps"],
+            "draft_answer":        buddhi_result["draft_answer"],
+            "pass1_answer":        buddhi_result["pass1_answer"],
+            "pass2_fired":         buddhi_result["pass2_fired"],
+            "pass2_verified":      buddhi_result["pass2_verified"],
+            "pass3_fired":         buddhi_result["pass3_fired"],
+            "model":               buddhi_result["model"],
+            "latency_s":           buddhi_result["latency_s"],
+            "detected_language":   buddhi_result["detected_language"],
             "structured_response": buddhi_result["structured_response"],
         },
-
-        "ahamkara": ahamkara_result,
-
+        "ahamkara":    ahamkara_result,
         "sakshi": {
             "verified":            sakshi_result["verified"],
             "corrected":           sakshi_result["corrected"],
@@ -289,13 +362,9 @@ async def reason(
             "sakshi_summary":      sakshi_result.get("sakshi_summary", ""),
             "medical_disclaimer":  sakshi_result["medical_disclaimer"],
         },
-
-        "tool_result": tool_result,
-
-        # final_answer ALWAYS = sakshi verified answer
+        "tool_result":  tool_result,
         "final_answer": sakshi_result["final_answer"],
-
-        "sources": chitta_result["sources"],
+        "sources":      chitta_result["sources"],
     }
 
     if image_path and image_path.exists():
@@ -305,42 +374,6 @@ async def reason(
             pass
 
     return JSONResponse(content=response)
-
-
-# ── W&B logging helper (MLOps Day 3) ─────────────────────────────────────────
-
-def _log_wandb(request_id, question, buddhi_result, ahamkara_result, sakshi_result, latency):
-    """Log each inference to Weights & Biases. No-ops silently if WANDB_API_KEY not set."""
-    api_key = os.environ.get("WANDB_API_KEY", "")
-    if not api_key:
-        return
-    try:
-        import wandb
-        if not wandb.run:
-            wandb.init(
-                project=os.environ.get("WANDB_PROJECT", "rrr-clinic-medassist"),
-                entity=os.environ.get("WANDB_ENTITY") or None,
-                name=f"inference-{request_id}",
-                reinit=True,
-                mode="online",
-            )
-        wandb.log({
-            "request_id":         request_id,
-            "latency_s":          latency,
-            "buddhi_latency_s":   buddhi_result.get("latency_s", 0),
-            "confidence_score":   ahamkara_result.get("confidence_score", 0),
-            "confidence_label":   ahamkara_result.get("confidence_label", ""),
-            "pass2_fired":        int(buddhi_result.get("pass2_fired", False)),
-            "pass3_fired":        int(buddhi_result.get("pass3_fired", False)),
-            "pass2_verified":     int(buddhi_result.get("pass2_verified", True)),
-            "sakshi_verified":    int(sakshi_result.get("verified", True)),
-            "sakshi_corrected":   int(sakshi_result.get("corrected", False)),
-            "detected_language":  buddhi_result.get("detected_language", "en"),
-            "model":              buddhi_result.get("model", "unknown"),
-            "question_length":    len(question),
-        })
-    except Exception as e:
-        logger.debug(f"[W&B] Logging skipped: {e}")
 
 
 # ── Tool handlers ─────────────────────────────────────────────────────────────
@@ -373,20 +406,16 @@ def _extract_drug_from_question(question: str, entities: list, vision_result) ->
 async def _handle_dosage(question: str, entities: list, vision_result) -> dict:
     try:
         from tools.dosage_calc import calculate_dosage
-
         weight_m  = re.search(r"(\d+(?:\.\d+)?)\s*(?:kg|kilogram)", question, re.IGNORECASE)
         weight    = float(weight_m.group(1)) if weight_m else 70.0
         q_lower   = question.lower()
         age_group = "adult"
-
         if any(w in q_lower for w in ["child", "kid", "pediatric", "baby", "infant", "year-old", "years old"]):
             age_group = "child"
         elif any(w in q_lower for w in ["elderly", "old", "senior", "geriatric"]):
             age_group = "elderly"
-
         drug        = _extract_drug_from_question(question, entities, vision_result)
         result_text = calculate_dosage.invoke({"drug": drug, "weight_kg": weight, "age_group": age_group})
-
         return {"tool": "dosage_calculator", "drug": drug, "weight_kg": weight, "age_group": age_group, "result": result_text}
     except Exception as e:
         logger.error(f"[DOSAGE] {e}")
@@ -396,13 +425,11 @@ async def _handle_dosage(question: str, entities: list, vision_result) -> dict:
 async def _handle_expiry(question: str, vision_result) -> dict:
     try:
         from tools.expiry_check import check_medicine_expiry
-
         expiry_date = None
         if vision_result:
             expiry_date = vision_result.get("expiry_date")
             if expiry_date in ["Not visible", "Not detected", None]:
                 expiry_date = None
-
         if not expiry_date:
             m = re.search(
                 r"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*\s+\d{4}\b"
@@ -410,10 +437,8 @@ async def _handle_expiry(question: str, vision_result) -> dict:
                 question, re.IGNORECASE,
             )
             expiry_date = m.group(0) if m else "Unknown"
-
         if expiry_date == "Unknown":
             return {"tool": "expiry_checker", "error": "No expiry date found in image or question"}
-
         result_text = check_medicine_expiry.invoke(expiry_date)
         return {"tool": "expiry_checker", "expiry_date": expiry_date, "result": result_text}
     except Exception as e:
@@ -424,19 +449,15 @@ async def _handle_expiry(question: str, vision_result) -> dict:
 async def _handle_fda(entities: list, vision_result) -> dict:
     try:
         from tools.fda_api import get_reaction_counts
-
         drug = None
         if vision_result:
             drug = vision_result.get("generic_name")
             if drug in ["Not detected", "Not visible", None]:
                 drug = None
-
         if not drug and entities:
             drug = entities[0]
-
         if not drug:
             return {"tool": "fda_api", "error": "No drug name identified"}
-
         data      = get_reaction_counts(drug, top_n=10)
         reactions = []
         if data and "results" in data:
@@ -454,7 +475,6 @@ async def _handle_fda(entities: list, vision_result) -> dict:
 
 @app.get("/api/sources")
 async def list_sources():
-    """List all indexed drug PDF sources."""
     data_dir = Path(os.environ.get("MEDASSIST_DATA_DIR", "./data/drug_guides"))
     pdfs     = list(data_dir.glob("*.pdf")) if data_dir.exists() else []
     return {"sources": [p.name for p in pdfs], "count": len(pdfs)}
@@ -462,7 +482,6 @@ async def list_sources():
 
 @app.post("/api/search")
 async def search(query: str = Form(...)):
-    """Direct ChromaDB search — bypasses full reasoning pipeline."""
     from rag.medassist_rag import search_drug_database
     chunks = search_drug_database(query, k=5)
     return {"query": query, "results": chunks, "count": len(chunks)}
@@ -470,7 +489,6 @@ async def search(query: str = Form(...)):
 
 @app.post("/api/vision")
 async def vision_only(image: UploadFile = File(...)):
-    """Standalone medicine image analysis via GPT-4o."""
     image_path = UPLOAD_DIR / f"{uuid.uuid4()}_{image.filename}"
     contents   = await image.read()
     with open(image_path, "wb") as f:
