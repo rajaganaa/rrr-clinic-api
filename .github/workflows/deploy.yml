@@ -1,14 +1,4 @@
 # RRR Clinic API — CI/CD Pipeline
-# Trigger: push to main → test → build Docker → push GHCR → deploy Azure Container Apps
-#
-# Required GitHub Secrets (Settings → Secrets → Actions):
-#   GROQ_API_KEY          — Groq API key
-#   GITHUB_TOKEN          — auto-provided by GitHub Actions
-#   AZURE_CREDENTIALS     — output of: az ad sp create-for-rbac --sdk-auth
-#   AZURE_RESOURCE_GROUP  — e.g. rrr-clinic-rg
-#   AZURE_CONTAINER_APP   — e.g. rrr-clinic-api
-#   AZURE_CONTAINER_ENV   — e.g. rrr-clinic-env
-
 name: Deploy RRR Clinic API
 
 on:
@@ -26,7 +16,6 @@ jobs:
   test:
     name: Run tests
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -110,10 +99,6 @@ jobs:
     needs: build
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
 
-    environment:
-      name: production
-      url: https://${{ secrets.AZURE_CONTAINER_APP }}.azurecontainerapps.io
-
     steps:
       - name: Azure login
         uses: azure/login@v2
@@ -128,13 +113,11 @@ jobs:
           imageToDeploy: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
           environmentVariables: |
             GROQ_API_KEY=${{ secrets.GROQ_API_KEY }}
-            GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}
-            WANDB_API_KEY=${{ secrets.WANDB_API_KEY }}
             PORT=8000
 
       - name: Health check after deploy
         run: |
           sleep 30
-          curl -f https://${{ secrets.AZURE_CONTAINER_APP }}.azurecontainerapps.io/health \
+          curl -f https://rrr-clinic-api.kindrock-2ca528ff.centralindia.azurecontainerapps.io/health \
             && echo "Deployment healthy!" \
             || echo "Health check failed — check Azure portal"
