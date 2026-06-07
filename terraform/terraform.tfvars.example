@@ -1,0 +1,11 @@
+# terraform.tfvars.example — Copy to terraform.tfvars and fill values
+# NEVER commit terraform.tfvars to GitHub
+
+resource_group_name = "antahkarana-rg"
+location            = "centralindia"
+app_name            = "rrr-clinic-api"
+container_image     = "ghcr.io/rajaganaa/rrr-clinic-api:latest"
+
+groq_api_key  = "gsk_YOUR_GROQ_KEY_HERE"
+github_token  = "ghp_YOUR_GITHUB_TOKEN_HERE"
+wandb_api_key = "YOUR_WANDB_KEY_HERE"

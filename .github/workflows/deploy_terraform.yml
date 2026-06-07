@@ -1,0 +1,43 @@
+# .github/workflows/deploy_terraform.yml
+# Add this to your rrr-clinic-api repo
+# Runs Terraform on push to main
+
+name: Terraform Infrastructure
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'terraform/**'
+  workflow_dispatch:
+
+jobs:
+  terraform:
+    name: Terraform Apply
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.7.0"
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Terraform Init
+        working-directory: terraform
+        run: terraform init
+
+      - name: Terraform Plan
+        working-directory: terraform
+        run: terraform plan -var="groq_api_key=${{ secrets.GROQ_API_KEY }}" -var="github_token=${{ secrets.GITHUB_TOKEN }}" -var="wandb_api_key=${{ secrets.WANDB_API_KEY }}"
+
+      - name: Terraform Apply
+        working-directory: terraform
+        run: terraform apply -auto-approve -var="groq_api_key=${{ secrets.GROQ_API_KEY }}" -var="github_token=${{ secrets.GITHUB_TOKEN }}" -var="wandb_api_key=${{ secrets.WANDB_API_KEY }}"
