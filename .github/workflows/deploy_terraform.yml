@@ -1,14 +1,10 @@
 # .github/workflows/deploy_terraform.yml
 # Add this to your rrr-clinic-api repo
-# Runs Terraform on push to main
+# Run manually when Azure credentials are configured
 
 name: Terraform Infrastructure
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'terraform/**'
   workflow_dispatch:
 
 jobs:
