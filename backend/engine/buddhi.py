@@ -1,5 +1,5 @@
 """
-engine/buddhi.py — Buddhi: Core Reasoner using Groq (llama3-70b-8192)
+engine/buddhi.py — Buddhi: Core Reasoner using Groq (llama-3.3-70b-versatile)
 RRR Clinic MedAssist — CPU-only Azure deployment.
 
 Buddhi is intellect/discriminative intelligence in Indian philosophy.
@@ -24,7 +24,7 @@ from typing import Optional, List, Dict, Tuple
 
 logger = logging.getLogger(__name__)
 
-GROQ_MODEL   = os.environ.get("GROQ_MODEL",   "llama3-70b-8192")
+GROQ_MODEL   = os.environ.get("GROQ_MODEL",   "llama-3.3-70b-versatile")
 GITHUB_MODEL = os.environ.get("GITHUB_MODEL", "gpt-4o")
 USE_VLLM     = False  # No GPU on Azure. Hardcoded forever.
 
